@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera View Editor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .camera-list {
+            flex: 1;
+            max-width: 300px;
+            background-color: white;
+            border-radius: 5px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .camera-view {
+            flex: 3;
+            background-color: white;
+            border-radius: 5px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .camera-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+            .camera-item:hover {
+                background-color: #f5f5f5;
+            }
+
+            .camera-item.selected {
+                background-color: #e0f7fa;
+                border-color: #4fc3f7;
+            }
+
+        .camera-stream {
+            max-width: 100%;
+            border: 1px solid #ccc;
+        }
+
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+            button:hover {
+                background-color: #45a049;
+            }
+
+            button.stop {
+                background-color: #f44336;
+            }
+
+                button.stop:hover {
+                    background-color: #d32f2f;
+                }
+
+        .camera-details {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+
+        .navbar {
+            margin-bottom: 20px;
+        }
+
+            .navbar a {
+                margin-right: 15px;
+                text-decoration: none;
+                color: #2196F3;
+                font-weight: bold;
+            }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <a href="/viewer">Main Viewer</a>
+        <a href="/edit">Camera Editor</a>
+    </div>
+
+    <h1>Camera View Editor</h1>
+
+    <div class="container">
+        <div class="camera-list" id="camera-list">
+            <h3>Available Cameras</h3>
+            <!-- Camera list will be loaded here -->
+            <div id="cameras-container">Loading cameras...</div>
+        </div>
+
+        <div class="camera-view">
+            <h3 id="selected-camera-title">Select a Camera</h3>
+            <div id="stream-container">
+                <!-- Stream will be shown here when a camera is selected -->
+                <p>Select a camera from the list to view the stream</p>
+            </div>
+
+            <div class="camera-details" id="camera-details">
+                <!-- Camera details will be shown here -->
+            </div>
+
+            <div class="controls">
+                <button id="start-camera" disabled>Start Camera</button>
+                <button id="stop-camera" class="stop" disabled>Stop Camera</button>
+                <button id="remove-camera" class="stop" disabled>Remove Camera</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const baseUrl = window.location.protocol + '//' + window.location.host;
+        let selectedCameraId = null;
+        let cameras = [];
+
+        // Function to load all available cameras
+        async function loadCameras() {
+            try {
+                const response = await fetch(`${baseUrl}/cameras`);
+                const data = await response.json();
+                cameras = data.cameras || [];
+
+                const camerasContainer = document.getElementById('cameras-container');
+
+                if (cameras.length > 0) {
+                    camerasContainer.innerHTML = ''; // Clear existing content
+
+                    // Create a camera item for each camera
+                    cameras.forEach(camera => {
+                        const cameraItem = document.createElement('div');
+                        cameraItem.className = 'camera-item';
+                        cameraItem.id = `camera-item-${camera.id}`;
+                        cameraItem.textContent = `Camera ${camera.id} (${camera.active ? 'Active' : 'Stopped'})`;
+                        cameraItem.onclick = () => selectCamera(camera.id);
+
+                        camerasContainer.appendChild(cameraItem);
+                    });
+                } else {
+                    camerasContainer.innerHTML = '<p>No cameras available</p>';
+                }
+            } catch (error) {
+                console.error('Error loading cameras:', error);
+                document.getElementById('cameras-container').innerHTML =
+                    '<p>Error loading cameras. Check console for details.</p>';
+            }
+        }
+
+        // Function to select a camera
+        function selectCamera(cameraId) {
+            // Update selected camera
+            selectedCameraId = cameraId;
+
+            // Update UI to show selected camera
+            const cameraItems = document.querySelectorAll('.camera-item');
+            cameraItems.forEach(item => {
+                item.classList.remove('selected');
+            });
+
+            const selectedItem = document.getElementById(`camera-item-${cameraId}`);
+            if (selectedItem) {
+                selectedItem.classList.add('selected');
+            }
+
+            // Update camera title
+            document.getElementById('selected-camera-title').textContent = `Camera ${cameraId}`;
+
+            // Update stream container
+            const streamContainer = document.getElementById('stream-container');
+            streamContainer.innerHTML = '';
+
+            const img = document.createElement('img');
+            img.className = 'camera-stream';
+            img.src = `${baseUrl}/stream/${cameraId}?t=${new Date().getTime()}`;
+            streamContainer.appendChild(img);
+
+            // Update camera details
+            updateCameraDetails(cameraId);
+
+            // Enable buttons
+            document.getElementById('start-camera').disabled = false;
+            document.getElementById('stop-camera').disabled = false;
+            document.getElementById('remove-camera').disabled = false;
+        }
+
+        // Function to update camera details
+        function updateCameraDetails(cameraId) {
+            const camera = cameras.find(c => c.id === cameraId);
+            if (camera) {
+                const detailsContainer = document.getElementById('camera-details');
+                detailsContainer.innerHTML = `
+                        <p><strong>ID:</strong> ${camera.id}</p>
+                        <p><strong>Source:</strong> ${camera.source}</p>
+                        <p><strong>Status:</strong> ${camera.active ? 'Active' : 'Stopped'}</p>
+                        <p><strong>FPS:</strong> ${camera.fps.toFixed(1)}</p>
+                        <p><strong>Last Access:</strong> ${new Date(camera.last_access * 1000).toLocaleTimeString()}</p>
+                    `;
+            }
+        }
+
+        // Function to start a camera
+        async function startCamera() {
+            if (!selectedCameraId) return;
+
+            try {
+                const response = await fetch(`${baseUrl}/cameras/${selectedCameraId}/start`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    alert(`Camera ${selectedCameraId} started successfully`);
+                    await loadCameras(); // Refresh camera list
+                    if (selectedCameraId) {
+                        selectCamera(selectedCameraId); // Refresh selected camera
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                }
+            } catch (error) {
+                console.error('Error starting camera:', error);
+                alert('Error starting camera. Check the console for details.');
+            }
+        }
+
+        // Function to stop a camera
+        async function stopCamera() {
+            if (!selectedCameraId) return;
+
+            try {
+                const response = await fetch(`${baseUrl}/cameras/${selectedCameraId}/stop`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    alert(`Camera ${selectedCameraId} stopped successfully`);
+                    await loadCameras(); // Refresh camera list
+                    if (selectedCameraId) {
+                        selectCamera(selectedCameraId); // Refresh selected camera
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                }
+            } catch (error) {
+                console.error('Error stopping camera:', error);
+                alert('Error stopping camera. Check the console for details.');
+            }
+        }
+
+        // Function to remove a camera
+        async function removeCamera() {
+            if (!selectedCameraId) return;
+
+            if (confirm(`Are you sure you want to remove Camera ${selectedCameraId}?`)) {
+                try {
+                    const response = await fetch(`${baseUrl}/cameras/${selectedCameraId}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (response.ok) {
+                        alert(`Camera ${selectedCameraId} removed successfully`);
+                        const removedCameraId = selectedCameraId;
+                        selectedCameraId = null;
+
+                        // Reset view
+                        document.getElementById('selected-camera-title').textContent = 'Select a Camera';
+                        document.getElementById('stream-container').innerHTML =
+                            '<p>Select a camera from the list to view the stream</p>';
+                        document.getElementById('camera-details').innerHTML = '';
+                        document.getElementById('start-camera').disabled = true;
+                        document.getElementById('stop-camera').disabled = true;
+                        document.getElementById('remove-camera').disabled = true;
+
+                        await loadCameras(); // Refresh camera list
+                    } else {
+                        const error = await response.json();
+                        alert(`Error: ${error.detail}`);
+                    }
+                } catch (error) {
+                    console.error('Error removing camera:', error);
+                    alert('Error removing camera. Check the console for details.');
+                }
+            }
+        }
+
+        // Periodically update camera details
+        setInterval(async () => {
+            if (selectedCameraId !== null) {
+                try {
+                    const response = await fetch(`${baseUrl}/cameras`);
+                    const data = await response.json();
+                    cameras = data.cameras || [];
+                    updateCameraDetails(selectedCameraId);
+                } catch (error) {
+                    console.error('Error updating camera details:', error);
+                }
+            }
+        }, 2000);
+
+        // Add event listeners for buttons
+        document.getElementById('start-camera').addEventListener('click', startCamera);
+        document.getElementById('stop-camera').addEventListener('click', stopCamera);
+        document.getElementById('remove-camera').addEventListener('click', removeCamera);
+
+        // Load cameras on page load
+        document.addEventListener('DOMContentLoaded', loadCameras);</script>
+</body>
+</html>
