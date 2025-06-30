@@ -10,12 +10,13 @@ import cv2
 import numpy as np
 import time
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import queue
 import uvicorn
 import os
 import random
 from camera_manager import CameraManager
+from pydantic import BaseModel
 
 
 # Initialize FastAPI app
@@ -269,7 +270,7 @@ async def reload_cameras():
         "added": added_count
     }
 
-@app.get("/viewer")
+@app.get("/index")
 async def get_viewer():
     """Serve the main page for the viewer"""
     try:
@@ -315,29 +316,87 @@ async def get_editor():
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"message": f"Error reading or creating edit.html: {str(e)}"}
-        )
+            content={"message": f"Error reading or creating edit.html: {str(e)}"
+        })
+
+# Models for mask data
+class Point(BaseModel):
+    x: int
+    y: int
+
+class MaskData(BaseModel):
+    points: List[Point]
+    canvasWidth: int
+    canvasHeight: int
+
+@app.post("/cameras/{camera_id}/mask")
+async def set_camera_mask(camera_id: int, mask_data: MaskData):
+    """Set a mask for a specific camera using polygon points"""
+    # Convert points to list of (x,y) tuples
+    points = [(p.x, p.y) for p in mask_data.points]
+    
+    if len(points) < 3:
+        raise HTTPException(status_code=400, detail="At least 3 points are required to create a mask")
+    
+    success = camera_manager.set_mask(camera_id, points, mask_data.canvasWidth, mask_data.canvasHeight)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to set mask. Camera may not exist or have no frames yet.")
+    
+    # Save mask configurations to JSON file
+    camera_manager._save_masks()
+    
+    return {"message": f"Mask set for camera {camera_id}"}
+
+@app.delete("/cameras/{camera_id}/mask")
+async def clear_camera_mask(camera_id: int):
+    """Clear the mask for a specific camera"""
+    success = camera_manager.clear_mask(camera_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"No mask found for camera {camera_id}")
+    
+    # Save mask configurations to JSON file after clearing
+    camera_manager._save_masks()
+    
+    return {"message": f"Mask cleared for camera {camera_id}"}
 
 # Startup event to load cameras from file
 @app.on_event("startup")
 async def startup_event():
+    # Create static directory if it doesn't exist
+    os.makedirs("static", exist_ok=True)
+    
+    # Print server startup message
+    print("*" * 80)
+    print("Starting CCTV Stream Detection Server")
+    print("*" * 80)
+    
     # Load cameras from the configuration file
     cameras = load_camera_sources()
-    print ("Starting up server and loading cameras from configuration file...")
-    print (cameras)
+    print("\nLoading cameras from configuration file:")
+    print(cameras)
+    
     # If no cameras in file, add the default camera (0)
     if not cameras:
-        print("No cameras found in configuration file. Adding default camera (ID: 0)")
+        print("\nNo cameras found in configuration file. Adding default camera (ID: 0)")
         camera_manager.add_camera(0)
     else:
         # Add all cameras from the configuration file
+        added_count = 0
+        failed_count = 0
         for camera_id, source in cameras:
             success = camera_manager.add_camera(camera_id, source)
             if success:
+                added_count += 1
                 print(f"Added camera {camera_id} with source {source}")
             else:
+                failed_count += 1
                 print(f"Failed to add camera {camera_id} with source {source}")
-
+        
+        print(f"\nCamera initialization complete: {added_count} added, {failed_count} failed")
+    
+    # Explicitly mention that masks will be applied when frames are available
+    print("\nCamera masks will be applied as frames become available")
+    print("*" * 80)
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

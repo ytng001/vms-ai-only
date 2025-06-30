@@ -104,11 +104,38 @@
                 color: #2196F3;
                 font-weight: bold;
             }
+
+        #canvas-overlay {
+            position: absolute;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .stream-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
+        .masking-controls {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e3f2fd;
+            border-radius: 4px;
+            border-left: 4px solid #2196F3;
+        }
+
+            .masking-controls button {
+                margin-right: 10px;
+            }
+
+        .drawing-active {
+            cursor: crosshair !important;
+        }
     </style>
 </head>
 <body>
     <div class="navbar">
-        <a href="/viewer">Main Viewer</a>
+        <a href="/index">Main Viewer</a>
         <a href="/edit">Camera Editor</a>
     </div>
 
@@ -128,6 +155,18 @@
                 <p>Select a camera from the list to view the stream</p>
             </div>
 
+            <div class="masking-controls" id="masking-controls" style="display: none;">
+                <h4>Mask Controls</h4>
+                <div>
+                    <button id="start-drawing" class="mask-btn">Draw Mask</button>
+                    <button id="clear-drawing" class="mask-btn stop">Clear Mask</button>
+                    <button id="apply-mask" class="mask-btn" disabled>Apply Mask</button>
+                </div>
+                <p id="drawing-instructions" style="display: none;">
+                    Click to create polygon points. Double-click or click the first point to complete the polygon.
+                </p>
+            </div>
+
             <div class="camera-details" id="camera-details">
                 <!-- Camera details will be shown here -->
             </div>
@@ -141,9 +180,17 @@
     </div>
 
     <script>
-    const baseUrl = window.location.protocol + '//' + window.location.host;
+        const baseUrl = window.location.protocol + '//' + window.location.host;
         let selectedCameraId = null;
         let cameras = [];
+
+        // Variables for mask drawing
+        let isDrawing = false;
+        let canvas = null;
+        let ctx = null;
+        let points = [];
+        let imageElement = null;
+        let drawingComplete = false;
 
         // Function to load all available cameras
         async function loadCameras() {
@@ -200,18 +247,309 @@
             const streamContainer = document.getElementById('stream-container');
             streamContainer.innerHTML = '';
 
-            const img = document.createElement('img');
-            img.className = 'camera-stream';
-            img.src = `${baseUrl}/stream/${cameraId}?t=${new Date().getTime()}`;
-            streamContainer.appendChild(img);
+            // Create a wrapper for both the image and canvas
+            const streamWrapper = document.createElement('div');
+            streamWrapper.className = 'stream-wrapper';
+            streamWrapper.id = 'stream-wrapper';
+
+            // Create the image element for the stream
+            imageElement = document.createElement('img');
+            imageElement.className = 'camera-stream';
+            imageElement.id = 'camera-stream';
+            imageElement.src = `${baseUrl}/stream/${cameraId}?t=${new Date().getTime()}`;
+
+            streamWrapper.appendChild(imageElement);
+            streamContainer.appendChild(streamWrapper);
+
+            // Wait for the image to load before setting up the canvas
+            imageElement.onload = setupCanvas;
 
             // Update camera details
             updateCameraDetails(cameraId);
+
+            // Show masking controls
+            document.getElementById('masking-controls').style.display = 'block';
+
+            // Clear any previous mask data
+            points = [];
+            drawingComplete = false;
+            document.getElementById('apply-mask').disabled = true;
 
             // Enable buttons
             document.getElementById('start-camera').disabled = false;
             document.getElementById('stop-camera').disabled = false;
             document.getElementById('remove-camera').disabled = false;
+        }
+
+        // Set up the canvas overlay for drawing masks
+        function setupCanvas() {
+            // Remove any existing canvas
+            const existingCanvas = document.getElementById('canvas-overlay');
+            if (existingCanvas) {
+                existingCanvas.remove();
+            }
+
+            // Create canvas element that overlays the image
+            canvas = document.createElement('canvas');
+            canvas.id = 'canvas-overlay';
+            canvas.width = imageElement.clientWidth;
+            canvas.height = imageElement.clientHeight;
+
+            // Position the canvas over the image
+            const streamWrapper = document.getElementById('stream-wrapper');
+            streamWrapper.appendChild(canvas);
+
+            // Set canvas position to match the image
+            canvas.style.width = `${imageElement.clientWidth}px`;
+            canvas.style.height = `${imageElement.clientHeight}px`;
+            canvas.style.position = 'absolute';
+            canvas.style.left = '0';
+            canvas.style.top = '0';
+
+            // Get the context for drawing
+            ctx = canvas.getContext('2d');
+
+            // Set up event handlers for the canvas
+            canvas.addEventListener('click', handleCanvasClick);
+            canvas.addEventListener('mousemove', handleCanvasMouseMove);
+        }
+
+        // Start drawing mode
+        function startDrawing() {
+            isDrawing = true;
+            points = [];
+            drawingComplete = false;
+            document.getElementById('apply-mask').disabled = true;
+            document.getElementById('drawing-instructions').style.display = 'block';
+
+            // Add drawing-active class to the stream wrapper
+            const streamWrapper = document.getElementById('stream-wrapper');
+            streamWrapper.classList.add('drawing-active');
+
+            // Make canvas receive pointer events
+            const canvasOverlay = document.getElementById('canvas-overlay');
+            if (canvasOverlay) {
+                canvasOverlay.style.pointerEvents = 'auto';
+            }
+
+            // Clear any existing drawing
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        // Handle clicks on the canvas
+        function handleCanvasClick(e) {
+            if (!isDrawing) return;
+
+            // Get mouse coordinates relative to the canvas
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+            // Check if this is a click near the first point (to close the polygon)
+            if (points.length > 2) {
+                const firstPoint = points[0];
+                const distance = Math.sqrt(Math.pow(x - firstPoint.x, 2) + Math.pow(y - firstPoint.y, 2));
+
+                if (distance < 20) { // Close enough to first point
+                    completeMask();
+                    return;
+                }
+            }
+
+            // Add the point
+            points.push({ x, y });
+
+            // Draw the updated mask
+            drawMask();
+        }
+
+        // Handle mouse movement for drawing the preview line
+        function handleCanvasMouseMove(e) {
+            if (!isDrawing || points.length === 0 || drawingComplete) return;
+
+            // Get mouse coordinates relative to the canvas
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+            // Draw the mask with a preview line
+            drawMask(x, y);
+        }
+
+        // Draw the mask on the canvas
+        function drawMask(previewX, previewY) {
+            if (!ctx || points.length === 0) return;
+
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Set drawing style
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
+
+            // Start drawing
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+
+            // Draw lines between all points
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+
+            // If we have a preview point, draw a line to it
+            if (previewX !== undefined && previewY !== undefined) {
+                ctx.lineTo(previewX, previewY);
+            }
+
+            // If the drawing is complete, close the path and fill
+            if (drawingComplete) {
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Draw the lines
+            ctx.stroke();
+
+            // Draw the points
+            ctx.fillStyle = '#00ff00';
+            for (const point of points) {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+
+            // Highlight the first point as the closing point
+            if (points.length > 2) {
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(points[0].x, points[0].y, 7, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        // Complete mask drawing
+        function completeMask() {
+            if (points.length < 3) {
+                alert('At least 3 points are needed to create a mask');
+                return;
+            }
+
+            drawingComplete = true;
+            isDrawing = false;
+
+            // Remove the drawing-active class
+            const streamWrapper = document.getElementById('stream-wrapper');
+            streamWrapper.classList.remove('drawing-active');
+
+            // Disable pointer events on canvas
+            const canvasOverlay = document.getElementById('canvas-overlay');
+            if (canvasOverlay) {
+                canvasOverlay.style.pointerEvents = 'none';
+            }
+
+            // Hide instructions
+            document.getElementById('drawing-instructions').style.display = 'none';
+
+            // Enable apply mask button
+            document.getElementById('apply-mask').disabled = false;
+
+            // Draw the final mask
+            drawMask();
+        }
+
+        // Clear the drawn mask
+        function clearMask() {
+            points = [];
+            drawingComplete = false;
+            isDrawing = false;
+
+            // Disable the apply button
+            document.getElementById('apply-mask').disabled = true;
+
+            // Clear the canvas
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // Hide instructions
+            document.getElementById('drawing-instructions').style.display = 'none';
+
+            // Remove the drawing-active class
+            const streamWrapper = document.getElementById('stream-wrapper');
+            streamWrapper.classList.remove('drawing-active');
+
+            // Disable pointer events on canvas
+            const canvasOverlay = document.getElementById('canvas-overlay');
+            if (canvasOverlay) {
+                canvasOverlay.style.pointerEvents = 'none';
+            }
+        }
+
+        // Apply the mask to the camera
+        async function applyMask() {
+            if (!selectedCameraId || points.length < 3) return;
+
+            try {
+                const response = await fetch(`${baseUrl}/cameras/${selectedCameraId}/mask`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        points: points,
+                        canvasWidth: canvas.width,
+                        canvasHeight: canvas.height
+                    })
+                });
+
+                if (response.ok) {
+                    alert('Mask applied successfully');
+                    // Refresh the stream to see the mask applied
+                    if (imageElement) {
+                        imageElement.src = `${baseUrl}/stream/${selectedCameraId}?t=${new Date().getTime()}`;
+                    }
+
+                    // Clear the canvas after applying
+                    clearMask();
+                } else {
+                    const errorData = await response.json();
+                    alert(`Error: ${errorData.detail || 'Failed to apply mask'}`);
+                }
+            } catch (error) {
+                console.error('Error applying mask:', error);
+                alert('Error applying mask. Check console for details.');
+            }
+        }
+
+        // Clear the mask on the server
+        async function clearServerMask() {
+            if (!selectedCameraId) return;
+
+            try {
+                const response = await fetch(`${baseUrl}/cameras/${selectedCameraId}/mask`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    alert('Mask cleared successfully');
+                    // Refresh the stream to see the change
+                    if (imageElement) {
+                        imageElement.src = `${baseUrl}/stream/${selectedCameraId}?t=${new Date().getTime()}`;
+                    }
+
+                    // Also clear the canvas
+                    clearMask();
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                }
+            } catch (error) {
+                console.error('Error clearing mask:', error);
+                alert('Error clearing mask. Check console for details.');
+            }
         }
 
         // Function to update camera details
@@ -220,12 +558,12 @@
             if (camera) {
                 const detailsContainer = document.getElementById('camera-details');
                 detailsContainer.innerHTML = `
-                        <p><strong>ID:</strong> ${camera.id}</p>
-                        <p><strong>Source:</strong> ${camera.source}</p>
-                        <p><strong>Status:</strong> ${camera.active ? 'Active' : 'Stopped'}</p>
-                        <p><strong>FPS:</strong> ${camera.fps.toFixed(1)}</p>
-                        <p><strong>Last Access:</strong> ${new Date(camera.last_access * 1000).toLocaleTimeString()}</p>
-                    `;
+                            <p><strong>ID:</strong> ${camera.id}</p>
+                            <p><strong>Source:</strong> ${camera.source}</p>
+                            <p><strong>Status:</strong> ${camera.active ? 'Active' : 'Stopped'}</p>
+                            <p><strong>FPS:</strong> ${camera.fps.toFixed(1)}</p>
+                            <p><strong>Last Access:</strong> ${new Date(camera.last_access * 1000).toLocaleTimeString()}</p>
+                        `;
             }
         }
 
@@ -302,6 +640,7 @@
                         document.getElementById('start-camera').disabled = true;
                         document.getElementById('stop-camera').disabled = true;
                         document.getElementById('remove-camera').disabled = true;
+                        document.getElementById('masking-controls').style.display = 'none';
 
                         await loadCameras(); // Refresh camera list
                     } else {
@@ -314,6 +653,11 @@
                 }
             }
         }
+
+        // Add event listeners for masking buttons
+        document.getElementById('start-drawing').addEventListener('click', startDrawing);
+        document.getElementById('clear-drawing').addEventListener('click', clearServerMask);
+        document.getElementById('apply-mask').addEventListener('click', applyMask);
 
         // Periodically update camera details
         setInterval(async () => {
@@ -333,6 +677,14 @@
         document.getElementById('start-camera').addEventListener('click', startCamera);
         document.getElementById('stop-camera').addEventListener('click', stopCamera);
         document.getElementById('remove-camera').addEventListener('click', removeCamera);
+
+        // Handle window resize to adjust canvas size
+        window.addEventListener('resize', () => {
+            if (imageElement && canvas) {
+                setupCanvas();
+                drawMask();
+            }
+        });
 
         // Load cameras on page load
         document.addEventListener('DOMContentLoaded', loadCameras);</script>
