@@ -1,3 +1,4 @@
-rtsp://ytng001:qwer1234@192.168.50.233:554/stream1
-rtsp://ytng001:qwer1234@192.168.50.233:554/stream1
+rtsp://abcd1234@192.168.50.233:554/stream1
+rtsp://abcd1234@192.168.50.233:554/stream2
+
 

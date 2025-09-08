@@ -1,0 +1,15 @@
+# Core web framework
+fastapi==0.104.0
+uvicorn==0.23.2
+pydantic==2.4.2
+
+# Computer vision and ML
+opencv-python==4.8.1.78
+numpy==1.26.0
+ultralytics==8.0.196  # For YOLO model
+torch==2.1.0  # PyTorch for GPU acceleration
+
+# Utils
+python-multipart==0.0.6  # For handling file uploads
+starlette==0.31.1  # FastAPI dependency
+Jinja2==3.1.2  # Template rendering (for create_html.py)
