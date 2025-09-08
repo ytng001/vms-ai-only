@@ -3,3 +3,6 @@
 2) Start the server by runnning server.py
 3) Access the live view/mask through http://localhost:8000/stream/1, http://localhost:8000/stream/2 , ...
 
+File functionality
+server.py : Handling all streams/Masking
+camera_manager.py : Handle multiple rtsp stream 
